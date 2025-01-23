@@ -12,7 +12,7 @@ function validatePassword(password) {
 
 // Register Function
 exports.register = async (req, res) => {
-  const { username, lastname, email, password } = req.body; // เพิ่ม lastname
+  const { name, email, password, phone } = req.body; // ใช้ name แทน username และ lastname, เพิ่ม phone
 
   try {
     // ตรวจสอบว่ามีผู้ใช้ที่ลงทะเบียนด้วยอีเมลนี้แล้วหรือไม่
@@ -29,9 +29,9 @@ exports.register = async (req, res) => {
 
     // บันทึกข้อมูลผู้ใช้
     const newUser = new User({
-      username,
-      lastname, // เพิ่ม lastname
+      name, // เก็บชื่อ
       email,
+      phone, // เก็บเบอร์โทรศัพท์
       password: hashedPassword,
       verificationToken,
     });
@@ -40,13 +40,13 @@ exports.register = async (req, res) => {
     // ส่งอีเมลยืนยัน
     const emailResponse = await emailController.sendVerificationEmail(
       email,
-      username,
+      name, // ส่ง name ไปในอีเมล
       verificationToken
     );
 
     // ตรวจสอบว่าอีเมลถูกส่งหรือไม่
     if (!emailResponse.success) {
-      console.error("Email error:", emailResponse.message); // แสดงข้อผิดพลาดที่เกิดขึ้นจากฟังก์ชันส่งอีเมล
+      console.error("Email error:", emailResponse.message);
       return res
         .status(500)
         .json({ msg: "Failed to send verification email." });
@@ -56,7 +56,7 @@ exports.register = async (req, res) => {
       .status(201)
       .json({ msg: "User registered successfully. Please verify your email." });
   } catch (err) {
-    console.error("Server error:", err); // แสดงข้อผิดพลาดจากเซิร์ฟเวอร์
+    console.error("Server error:", err);
     res.status(500).json({ msg: "Server error" });
   }
 };
@@ -96,16 +96,10 @@ exports.login = async (req, res) => {
   const { email, password } = req.body;
 
   try {
+    // ค้นหาผู้ใช้จากอีเมล
     const user = await User.findOne({ email });
     if (!user) {
       return res.status(400).json({ msg: "Invalid credentials" });
-    }
-
-    // ตรวจสอบสถานะการยืนยันอีเมล
-    if (!user.isVerified) {
-      return res
-        .status(400)
-        .json({ msg: "Please verify your email before logging in." });
     }
 
     // ตรวจสอบรหัสผ่าน
@@ -114,20 +108,44 @@ exports.login = async (req, res) => {
       return res.status(400).json({ msg: "Invalid credentials" });
     }
 
+    // ตรวจสอบว่าผู้ใช้ได้ยืนยันอีเมลหรือยัง
+    if (!user.isVerified) {
+      // ส่งอีเมลยืนยันอีกครั้ง
+      const emailResponse = await emailController.sendVerificationEmail(
+        user.email,
+        user.name, // ใช้ name
+        user.verificationToken
+      );
+
+      if (!emailResponse.success) {
+        console.error(
+          "Failed to resend verification email:",
+          emailResponse.message
+        );
+        return res.status(500).json({
+          msg: "Your email is not verified yet. Failed to resend verification email. Please contact support.",
+        });
+      }
+
+      return res.status(400).json({
+        msg: "Your email is not verified yet. A verification email has been resent to your email address.",
+      });
+    }
+
     // สร้าง JWT Token
     const token = jwt.sign(
-      { id: user._id, email: user.email }, // ข้อมูล payload
+      { id: user._id, email: user.email }, // Payload
       process.env.JWT_SECRET, // รหัสลับใน .env
-      { expiresIn: "1h" } // อายุการใช้งานของ token
+      { expiresIn: "1h" } // อายุการใช้งาน Token
     );
 
     // บันทึก Token ลงใน MongoDB
-    user.tokens.push({ token }); // เพิ่ม token ลงในฟิลด์ tokens
+    user.tokens.push({ token }); // เพิ่ม Token ลงในฟิลด์ tokens
     await user.save(); // บันทึกการเปลี่ยนแปลงลงในฐานข้อมูล
 
-    // ส่ง response พร้อม token
+    // ส่ง Response พร้อม Token
     res.json({
-      msg: "Logged in successfully",
+      msg: "Login successfully",
       token,
     });
   } catch (err) {
@@ -136,23 +154,42 @@ exports.login = async (req, res) => {
   }
 };
 
-// Logout
+// Logout Function
 exports.logout = async (req, res) => {
-  const { email, token } = req.body; // ต้องส่ง token มาใน body
+  const { email } = req.body;
+  const token = req.headers.authorization?.split(" ")[1];
 
   try {
+    if (!email || !token) {
+      return res
+        .status(400)
+        .json({ msg: "Email and authorization token are required" });
+    }
+
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+
     const user = await User.findOne({ email });
+
     if (!user) {
       return res.status(400).json({ msg: "User not found" });
     }
 
-    // ลบ Token ที่ระบุออกจากอาร์เรย์ tokens
+    const isTokenValid = user.tokens.some((item) => item.token === token);
+    if (!isTokenValid) {
+      return res.status(401).json({ msg: "Invalid token" });
+    }
+
     user.tokens = user.tokens.filter((item) => item.token !== token);
     await user.save();
 
-    res.json({ msg: "Logged out successfully" });
+    res.json({ msg: "Logout successfully" });
   } catch (err) {
-    console.error(err);
+    console.error("Logout error:", err);
+
+    if (err.name === "JsonWebTokenError") {
+      return res.status(401).json({ msg: "Invalid token" });
+    }
+
     res.status(500).json({ msg: "Server error" });
   }
 };

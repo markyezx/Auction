@@ -1,17 +1,12 @@
 const express = require("express");
-const authController = require("../controllers/authController");
+const authController = require("../controllers/authController"); // ตรวจสอบเส้นทางนี้ให้ถูกต้อง
 const router = express.Router();
 
-// Route สำหรับการลงทะเบียน
+// กำหนดเส้นทาง POST สำหรับการรีเซ็ตรหัสผ่าน
+router.post("/request-password-reset", authController.sendPasswordResetEmail);
+router.post("/reset-password", authController.forgotPassword);
 router.post("/register", authController.register);
-
-// กำหนด Route สำหรับ verifyEmail
-router.get("/verify", authController.sendVerificationEmail);
-
-// Route สำหรับ Login
 router.post("/login", authController.login);
-
-// POST /logout
 router.post("/logout", authController.logout);
 
 module.exports = router;

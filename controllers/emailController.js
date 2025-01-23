@@ -65,6 +65,34 @@ const verifySMTP = () => {
   });
 };
 
+exports.sendPasswordResetEmail = async (email, resetLink) => {
+  try {
+    const transporter = nodemailer.createTransport({
+      service: "gmail", // หรือ provider อื่น
+      auth: {
+        user: process.env.EMAIL_USER, // จาก .env
+        pass: process.env.EMAIL_PASS, // จาก .env
+      },
+    });
+
+    const mailOptions = {
+      from: process.env.EMAIL_USER,
+      to: email,
+      subject: "Password Reset Request",
+      html: `<p>Click the following link to reset your password:</p>
+             <a href="${resetLink}">${resetLink}</a>`,
+    };
+
+    const info = await transporter.sendMail(mailOptions);
+    console.log("Email sent: ", info.response);
+
+    return { success: true };
+  } catch (error) {
+    console.error("Error sending email: ", error);
+    return { success: false, message: error.message };
+  }
+};
+
 // เรียกใช้ฟังก์ชันทดสอบ SMTP
 verifySMTP();
 

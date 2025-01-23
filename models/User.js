@@ -1,16 +1,14 @@
-const mongoose = require("mongoose"); // เพิ่มการ require mongoose
+const mongoose = require("mongoose");
 
-const userSchema = new mongoose.Schema(
-  {
-    name: { type: String, required: true }, // ชื่อ
-    email: { type: String, required: true, unique: true }, // อีเมล
-    phone: { type: String, required: true }, // เบอร์โทรศัพท์
-    password: { type: String, required: true }, // รหัสผ่าน
-    isVerified: { type: Boolean, default: false }, // สถานะการยืนยันอีเมล
-    verificationToken: { type: String }, // โทเค็นยืนยันอีเมล
-    tokens: [{ token: { type: String } }], // JWT Token
-  },
-  { timestamps: true }
-); // เปิดใช้ timestamps (createdAt และ updatedAt)
+const userSchema = new mongoose.Schema({
+  name: { type: String, required: true },
+  email: { type: String, required: true, unique: true },
+  password: { type: String, required: true },
+  tokens: [{ token: String }],
+  verificationToken: { type: String },
+  isVerified: { type: Boolean, default: false },
+  resetPasswordToken: { type: String }, // ฟิลด์สำหรับ token การรีเซ็ตรหัสผ่าน
+  resetPasswordExpiry: { type: Date }, // ฟิลด์หมดอายุของ token
+});
 
 module.exports = mongoose.model("User", userSchema);

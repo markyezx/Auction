@@ -13,6 +13,7 @@ const app = express();
 // Middleware
 app.use(bodyParser.json());
 app.use(cors());
+app.use(express.json());
 
 // เชื่อมต่อ MongoDB
 mongoose

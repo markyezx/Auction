@@ -1,7 +1,6 @@
 const express = require("express");
 const authController = require("../controllers/authController");
 const router = express.Router();
-const verifyRefreshToken = require("../middleware/auth");
 
 // Route สำหรับการลงทะเบียน
 router.post("/register", authController.register);

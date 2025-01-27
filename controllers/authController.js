@@ -7,7 +7,7 @@ const nodemailer = require("nodemailer");
 
 // Function สำหรับตรวจสอบรูปแบบรหัสผ่าน
 function validatePassword(password) {
-  const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\W).{8,}$/;
+  const passwordRegex = /^.{4,}$/; // ตรวจสอบรหัสผ่านที่มีอย่างน้อย 4 ตัวอักษร
   return passwordRegex.test(password);
 }
 
@@ -97,25 +97,30 @@ exports.login = async (req, res) => {
   const { email, password } = req.body;
 
   try {
+    // ตรวจสอบว่ามี email และ password ใน request body หรือไม่
+    if (!email || !password) {
+      return res.status(400).json({ msg: "Email and password are required" });
+    }
+
     // ค้นหาผู้ใช้จากอีเมล
     const user = await User.findOne({ email });
     if (!user) {
-      return res.status(400).json({ msg: "Invalid credentials" });
+      return res.status(400).json({ msg: "Invalid email or password" });
     }
 
     // ตรวจสอบรหัสผ่าน
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) {
-      return res.status(400).json({ msg: "Invalid credentials" });
+      return res.status(400).json({ msg: "Invalid email or password" });
     }
 
-    // ตรวจสอบว่าผู้ใช้ได้ยืนยันอีเมลหรือยัง
+    // ตรวจสอบสถานะการยืนยันอีเมล
     if (!user.isVerified) {
       // สร้าง Verification Token ใหม่
       const verificationToken = crypto.randomBytes(16).toString("hex");
       user.verificationToken = verificationToken;
 
-      // บันทึก Token ใหม่ลงในฐานข้อมูล
+      // บันทึก Token ใหม่ในฐานข้อมูล
       await user.save();
 
       // ส่งอีเมลยืนยัน
@@ -147,8 +152,10 @@ exports.login = async (req, res) => {
       { expiresIn: "1h" } // อายุการใช้งาน Token
     );
 
-    // ลบ Token เก่าทั้งหมดและเก็บเฉพาะ Token ล่าสุดในฟิลด์ tokens
-    user.tokens = [{ token }];
+    // บันทึก Token ลงในฟิลด์ tokens ของผู้ใช้
+    user.tokens.push({ token });
+
+    // เก็บ Token ใหม่สุดในฐานข้อมูล
     await user.save();
 
     // ตั้งค่า Cookie สำหรับ Token
@@ -160,12 +167,12 @@ exports.login = async (req, res) => {
     });
 
     // ส่ง Response พร้อมข้อความสำเร็จ
-    res.json({
+    res.status(200).json({
       msg: "Login successfully",
       token, // ส่ง Token กลับใน Response ด้วย (ถ้าต้องการใช้ใน Client)
     });
   } catch (err) {
-    console.error(err);
+    console.error("Login error:", err);
     res.status(500).json({ msg: "Server error" });
   }
 };
@@ -216,45 +223,52 @@ exports.logout = async (req, res) => {
   }
 };
 
-// ฟังก์ชันสำหรับส่งอีเมลรีเซ็ตรหัสผ่าน
-exports.sendPasswordResetEmail = async (email, resetLink) => {
+// ฟังก์ชัน resetPassword สำหรับรีเซ็ตรหัสผ่านใหม่
+exports.resetPassword = async (req, res) => {
+  const { token, newPassword } = req.body;
+
   try {
-    if (!email) {
-      throw new Error("Email is required");
-    }
-    if (!resetLink) {
-      throw new Error("Reset link is required");
+    if (!token || !newPassword) {
+      return res
+        .status(400)
+        .json({ msg: "Token and new password are required" });
     }
 
-    console.log("Sending password reset email to:", email);
-    const transporter = nodemailer.createTransport({
-      host: process.env.SMTP_HOST, // ใช้ SMTP host ที่กำหนดใน .env
-      port: process.env.SMTP_PORT, // ใช้ SMTP port ที่กำหนดใน .env
-      secure: process.env.SMTP_SECURE === "true", // true ถ้าใช้ SSL
-      auth: {
-        user: process.env.SMTP_USER, // SMTP username
-        pass: process.env.SMTP_PASS, // SMTP password
-      },
+    // ค้นหาผู้ใช้โดยใช้ token และตรวจสอบ expiry
+    const user = await User.findOne({
+      resetPasswordToken: token,
+      resetPasswordExpiry: { $gt: Date.now() }, // ตรวจสอบว่า token ยังไม่หมดอายุ
     });
 
-    const mailOptions = {
-      from: process.env.SMTP_FROM, // อีเมลที่ใช้ส่ง
-      to: email, // ผู้รับอีเมล
-      subject: "Password Reset Request",
-      html: `<p>Click the link to reset your password: <a href="${resetLink}">Reset Password</a></p>`,
-    };
+    if (!user) {
+      return res.status(400).json({ msg: "Invalid or expired token" });
+    }
 
-    // ส่งอีเมล
-    await transporter.sendMail(mailOptions);
-    console.log("Password reset email sent successfully.");
-    return { success: true };
-  } catch (error) {
-    console.error("Failed to send password reset email:", error);
-    return { success: false, message: error.message };
+    // ตรวจสอบรูปแบบของรหัสผ่านใหม่
+    if (!validatePassword(newPassword)) {
+      return res.status(400).json({
+        msg: "Password must be at least 4 characters long.",
+      });
+    }
+
+    // เข้ารหัสรหัสผ่านใหม่
+    const hashedPassword = await bcrypt.hash(newPassword, 4);
+    user.password = hashedPassword;
+
+    // ล้าง token และ expiry
+    user.resetPasswordToken = null;
+    user.resetPasswordExpiry = null;
+
+    await user.save();
+
+    res.status(200).json({ msg: "Password reset successfully" });
+  } catch (err) {
+    console.error("Error in resetPassword:", err);
+    res.status(500).json({ msg: "Server error" });
   }
 };
 
-// ฟังก์ชัน forgotPassword สำหรับส่งลิงค์รีเซ็ตรหัสผ่าน
+// ปรับปรุง forgotPassword สำหรับการสร้างลิงก์ยืนยันการลืมรหัสผ่าน
 exports.forgotPassword = async (req, res) => {
   const { email } = req.body;
 
@@ -269,7 +283,7 @@ exports.forgotPassword = async (req, res) => {
       return res.status(404).json({ msg: "User not found" });
     }
 
-    // สร้างและบันทึก token สำหรับการรีเซ็ตรหัสผ่าน
+    // สร้าง token และบันทึก token พร้อม expiry
     const resetToken = crypto.randomBytes(32).toString("hex");
     const resetTokenExpiry = Date.now() + 3600000; // 1 ชั่วโมง
 
@@ -278,14 +292,14 @@ exports.forgotPassword = async (req, res) => {
 
     await user.save();
 
-    // สร้างลิงค์รีเซ็ตรหัสผ่าน
-    const resetLink = `${process.env.CLIENT_URL}/reset-password?token=${resetToken}`;
+    // สร้างลิงก์ยืนยันการลืมรหัสผ่าน
+    const resetLink = `${process.env.CLIENT_URL}/confirm-reset-password?token=${resetToken}`;
 
-    console.log("Sending reset link:", resetLink); // ล็อกค่าลิงค์
+    console.log("Sending reset link:", resetLink);
 
     // ส่งอีเมล
     const emailSent = await emailController.sendPasswordResetEmail(
-      user.email, // ตรวจสอบว่า user.email มีค่าหรือไม่
+      user.email,
       resetLink
     );
     if (!emailSent.success) {
@@ -298,5 +312,39 @@ exports.forgotPassword = async (req, res) => {
   } catch (err) {
     console.error("Error in forgotPassword:", err);
     res.status(500).json({ msg: "Server error" });
+  }
+};
+
+// ฟังก์ชัน confirmResetPassword สำหรับยืนยันลิงก์ที่ส่งไป
+const path = require("path");
+
+exports.confirmResetPassword = async (req, res) => {
+  const { token } = req.query;
+
+  try {
+    if (!token) {
+      return res.status(400).send("<h1>Token is required</h1>");
+    }
+
+    // ค้นหาผู้ใช้โดยใช้ token และตรวจสอบ expiry
+    const user = await User.findOne({
+      resetPasswordToken: token,
+      resetPasswordExpiry: { $gt: Date.now() }, // ตรวจสอบว่า token ยังไม่หมดอายุ
+    });
+
+    if (!user) {
+      return res.status(400).send("<h1>Invalid or expired token</h1>");
+    }
+
+    // เส้นทางไฟล์ reset-password.html
+    const resetPasswordPath = path.resolve(
+      __dirname,
+      "../views/reset-password.html"
+    );
+
+    res.sendFile(resetPasswordPath);
+  } catch (err) {
+    console.error("Error in confirmResetPassword:", err);
+    res.status(500).send("<h1>Server error</h1>");
   }
 };

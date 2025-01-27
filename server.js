@@ -4,6 +4,7 @@ const dotenv = require("dotenv");
 const authRoutes = require("./routes/authRoutes");
 const bodyParser = require("body-parser");
 const cors = require("cors");
+const path = require("path");
 
 // โหลดตัวแปรจากไฟล์ .env
 dotenv.config();
@@ -24,9 +25,13 @@ mongoose
 // Routes
 app.use("/api/auth", authRoutes);
 app.use("/auth", authRoutes);
+app.use("/", authRoutes);
 
 // เริ่มต้นเซิร์ฟเวอร์
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
+
+  // Static files middleware
+  app.use(express.static(path.join(__dirname, "views")));
 });

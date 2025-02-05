@@ -1,30 +1,26 @@
 const express = require("express");
 const router = express.Router();
-const {
-  createAuction,
-  getAllAuctions,
-  getAuctionById,
-  updateAuctionById,
-  deleteAuctionById,
-  placeBid,
-} = require("../../controllers/auctionController");
+const auctionController = require("../controllers/auctionController");
 
-// Create a new auction
-router.post("/", createAuction);
+// สร้างประมูล
+router.post("/", auctionController.createAuction);
 
-// Read all auctions
-router.get("/", getAllAuctions);
+// ดึงข้อมูลประมูลทั้งหมด
+router.get("/", auctionController.getAllAuctions);
 
-// Read an auction by ID
-router.get("/:id", getAuctionById);
+// ดึงประมูลตาม ID
+router.get("/:id", auctionController.getAuctionById);
 
-// Update an auction by ID
-router.put("/:id", updateAuctionById);
+// อัปเดตประมูล
+router.put("/:id", auctionController.updateAuctionById);
 
-// Delete an auction by ID
-router.delete("/:id", deleteAuctionById);
+// ลบประมูล
+router.delete("/:id", auctionController.deleteAuctionById);
 
-// Place a bid on an auction
-router.post("/:id/bid", placeBid);
+// ลงบิด
+router.post("/:id/bid", auctionController.placeBid);
+
+// ดึงประมูลที่ผ่านการประมูล
+router.get("/:id/bids", auctionController.getBidsByAuctionId);
 
 module.exports = router;

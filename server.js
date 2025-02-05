@@ -2,6 +2,7 @@ const express = require("express");
 const mongoose = require("mongoose");
 const dotenv = require("dotenv");
 const authRoutes = require("./routes/authRoutes");
+const auctionRoutes = require("./routes/auctionRoutes");
 const bodyParser = require("body-parser");
 const cors = require("cors");
 const path = require("path");
@@ -26,6 +27,7 @@ mongoose
 app.use("/api/auth", authRoutes);
 app.use("/auth", authRoutes);
 app.use("/", authRoutes);
+app.use("/api/auctions", auctionRoutes); // เส้นทาง API
 
 // เริ่มต้นเซิร์ฟเวอร์
 const PORT = process.env.PORT || 3000;

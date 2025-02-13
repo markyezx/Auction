@@ -1,24 +1,37 @@
 const mongoose = require("mongoose");
 
 const auctionSchema = new mongoose.Schema({
-  productName: { type: String, required: true },
-  productDescription: { type: String, required: true },
-  productSize: { type: String, required: true },
-  startingBid: { type: Number, required: true },
-  minimumIncrement: { type: Number, required: true },
-  currentBid: { type: Number, required: true, default: 0 },
-  highestBidder: { type: String, default: null },
+  productName: String,
+  productDescription: String,
+  productSize: String,
+  startingBid: Number,
+  minimumIncrement: Number,
+  currentBid: Number,
+  highestBidder: String,
   bids: [
     {
-      bidderName: { type: String, required: true },
-      bidAmount: { type: Number, required: true },
-      bidTime: { type: Date, default: Date.now },
+      bidderName: String,
+      bidAmount: Number,
+      bidTime: Date,
     },
   ],
-  startTime: { type: Date, required: true },
-  endsIn: { type: Date, required: true },
-  createdAt: { type: Date, default: Date.now },
-  updatedAt: { type: Date, default: Date.now },
+  productImages: [
+    {
+      type: String,
+      required: true,
+    },
+  ],
+  startTime: Date,
+  endsIn: Date,
+  auctionType: {
+    type: String,
+    enum: ["auto_extend", "fixed_time"],
+    required: true,
+  },
+  extendTime: {
+    type: Number,
+    default: 10, // ค่าเริ่มต้นคือ 10 นาที (เฉพาะ auto_extend)
+  },
 });
 
 const Auction = mongoose.model("Auction", auctionSchema);

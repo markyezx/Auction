@@ -23,7 +23,20 @@ const createAuction = async (req, res) => {
       startingBid,
       minimumIncrement,
       durationMinutes,
+      auctionType,
+      extendTime,
+      productImages,
     } = req.body;
+
+    if (
+      !productImages ||
+      !Array.isArray(productImages) ||
+      productImages.length === 0
+    ) {
+      return res
+        .status(400)
+        .json({ error: "At least one product image is required." });
+    }
 
     const startTime = new Date();
     const endsIn = new Date(startTime.getTime() + durationMinutes * 60 * 1000);
@@ -37,8 +50,11 @@ const createAuction = async (req, res) => {
       currentBid: startingBid,
       highestBidder: null,
       bids: [],
+      productImages,
       startTime,
       endsIn,
+      auctionType,
+      extendTime: auctionType === "auto_extend" ? extendTime : 0,
     });
 
     await auction.save();
@@ -96,23 +112,20 @@ const deleteAuctionById = async (req, res) => {
 // 📌 **ฟังก์ชันวางบิด**
 const placeBid = async (req, res) => {
   try {
-    // ตรวจสอบว่า req.user ถูกกำหนดหรือไม่
     if (!req.user) {
       return res.status(401).json({ error: "User not authenticated" });
     }
 
     const auctionId = req.params.id;
     const { bidAmount } = req.body;
-    const userId = req.user.userId; // ใช้ข้อมูลจาก req.user ที่ได้จาก authenticateUser
+    const userId = req.user.userId;
     const username = req.user.username;
 
-    // ตรวจสอบการประมูล
     const auction = await Auction.findById(auctionId);
     if (!auction) {
       return res.status(404).json({ error: "Auction not found" });
     }
 
-    // ตรวจสอบการเข้าร่วมประมูล
     let participant = await AuctionParticipant.findOne({ auctionId, userId });
     if (!participant) {
       participant = new AuctionParticipant({
@@ -124,7 +137,6 @@ const placeBid = async (req, res) => {
       await participant.save();
     }
 
-    // ตรวจสอบเงื่อนไขการบิด
     const now = new Date();
     if (now > auction.endsIn) {
       return res.status(400).json({ error: "Auction has ended" });
@@ -138,30 +150,34 @@ const placeBid = async (req, res) => {
       });
     }
 
-    // บันทึกการบิดใน Auction
     auction.currentBid = bidAmount;
     auction.highestBidder = participant.participantName;
     auction.bids.push({
-      bidderName: participant.participantName, // ระบุ bidderName ที่ถูกต้อง
+      bidderName: participant.participantName,
       bidAmount,
       bidTime: now,
     });
 
-    // บันทึกการบิดลงใน BidCollect
     const bidCollect = new BidCollect({
       auctionId,
       userId,
       bidAmount,
       bidTime: now,
-      bidderName: participant.participantName, // ระบุ bidderName ที่ถูกต้อง
+      bidderName: participant.participantName,
     });
-    await bidCollect.save(); // เก็บข้อมูลใน BidCollect
+    await bidCollect.save();
 
-    // ต่อเวลาให้อัตโนมัติถ้าประมูลเหลือน้อยกว่า 10 นาที
-    extendAuctionTime(auction);
+    // **เช็คเงื่อนไขการต่อเวลา**
+    if (auction.auctionType === "auto_extend") {
+      const remainingTime = (auction.endsIn - now) / 1000; // คำนวณเวลาเหลือ
+      if (remainingTime <= auction.extendTime * 60) {
+        auction.endsIn = new Date(
+          now.getTime() + auction.extendTime * 60 * 1000
+        );
+      }
+    }
+
     await auction.save();
-
-    // บันทึกข้อมูลใน AuctionParticipant
     participant.bids.push({ bidAmount, bidTime: now });
     await participant.save();
 

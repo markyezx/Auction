@@ -1,11 +1,14 @@
 const Auction = require("../schema/auction.schema");
 const BidCollect = require("../schema/bidCollect.schema");
-
+const AuctionParticipant = require("../schema/auctionParticipant.schema");
+const jwt = require("jsonwebtoken");
+const mongoose = require("mongoose");
 // ฟังก์ชันคำนวณเวลาสิ้นสุดใหม่
 const extendAuctionTime = (auction) => {
   const now = new Date();
   const remainingTime = (auction.endsIn - now) / 1000; // วินาที
-  if (remainingTime <= 600) {
+  if (remainingTime <= 600 && auction.endsIn > now) {
+    // ตรวจสอบว่าประมูลยังไม่หมดเวลา
     auction.endsIn = new Date(now.getTime() + 10 * 60 * 1000); // ต่อเวลา 10 นาที
   }
 };
@@ -90,20 +93,42 @@ const deleteAuctionById = async (req, res) => {
   }
 };
 
-// ลงบิด (Bid)
+// 📌 **ฟังก์ชันวางบิด**
 const placeBid = async (req, res) => {
   try {
-    const auction = await Auction.findById(req.params.id);
-    if (!auction) return res.status(404).json({ error: "Auction not found" });
-
-    const { bidderName, bidAmount } = req.body;
-    const now = new Date();
-
-    if (now > auction.endsIn) {
-      // ✅ เปลี่ยนจาก auction.endTime -> auction.endsIn
-      return res.status(400).json({ error: "Auction has ended" });
+    // ตรวจสอบว่า req.user ถูกกำหนดหรือไม่
+    if (!req.user) {
+      return res.status(401).json({ error: "User not authenticated" });
     }
 
+    const auctionId = req.params.id;
+    const { bidAmount } = req.body;
+    const userId = req.user.userId; // ใช้ข้อมูลจาก req.user ที่ได้จาก authenticateUser
+    const username = req.user.username;
+
+    // ตรวจสอบการประมูล
+    const auction = await Auction.findById(auctionId);
+    if (!auction) {
+      return res.status(404).json({ error: "Auction not found" });
+    }
+
+    // ตรวจสอบการเข้าร่วมประมูล
+    let participant = await AuctionParticipant.findOne({ auctionId, userId });
+    if (!participant) {
+      participant = new AuctionParticipant({
+        auctionId,
+        userId,
+        participantName: username,
+        bids: [],
+      });
+      await participant.save();
+    }
+
+    // ตรวจสอบเงื่อนไขการบิด
+    const now = new Date();
+    if (now > auction.endsIn) {
+      return res.status(400).json({ error: "Auction has ended" });
+    }
     if (
       bidAmount <= auction.currentBid ||
       bidAmount < auction.currentBid + auction.minimumIncrement
@@ -113,28 +138,40 @@ const placeBid = async (req, res) => {
       });
     }
 
-    // ✅ บันทึกการลงบิดใน Auction
+    // บันทึกการบิดใน Auction
     auction.currentBid = bidAmount;
-    auction.highestBidder = bidderName;
-    auction.bids.push({ bidderName, bidAmount, bidTime: now });
-
-    extendAuctionTime(auction);
-    await auction.save();
-
-    // ✅ บันทึกลง BidCollect
-    const newBid = new BidCollect({
-      auctionId: auction._id,
-      bidderName,
+    auction.highestBidder = participant.participantName;
+    auction.bids.push({
+      bidderName: participant.participantName, // ระบุ bidderName ที่ถูกต้อง
       bidAmount,
       bidTime: now,
     });
-    await newBid.save();
 
-    res.json({ auction, newBid }); // ✅ ส่งข้อมูลการบิดกลับไป
+    // บันทึกการบิดลงใน BidCollect
+    const bidCollect = new BidCollect({
+      auctionId,
+      userId,
+      bidAmount,
+      bidTime: now,
+      bidderName: participant.participantName, // ระบุ bidderName ที่ถูกต้อง
+    });
+    await bidCollect.save(); // เก็บข้อมูลใน BidCollect
+
+    // ต่อเวลาให้อัตโนมัติถ้าประมูลเหลือน้อยกว่า 10 นาที
+    extendAuctionTime(auction);
+    await auction.save();
+
+    // บันทึกข้อมูลใน AuctionParticipant
+    participant.bids.push({ bidAmount, bidTime: now });
+    await participant.save();
+
+    res.json({ auction, participant });
   } catch (error) {
+    console.error("Place Bid Error:", error);
     res.status(400).json({ error: error.message });
   }
 };
+
 // ดึงข้อมูลการบิดทั้งหมดในแต่ละประมูล
 const getBidsByAuctionId = async (req, res) => {
   try {
@@ -176,6 +213,105 @@ const getBidsByAuctionId = async (req, res) => {
   }
 };
 
+// Middleware ดึงข้อมูล user จาก token
+const authenticateUser = (req, res, next) => {
+  const authHeader = req.header("Authorization");
+
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    return res.status(401).json({ error: "Access denied. No token provided." });
+  }
+
+  const token = authHeader.replace("Bearer ", "");
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    req.user = decoded; // เก็บข้อมูล userId และ username ไว้ใน req
+    next();
+  } catch (error) {
+    return res.status(401).json({ error: "Invalid or expired token." });
+  }
+};
+
+// 📌 **ฟังก์ชันเข้าร่วมประมูล**
+const joinAuction = async (req, res) => {
+  try {
+    const auctionId = req.params.id;
+    const token = req.header("Authorization");
+
+    // ตรวจสอบว่า token มีค่าไหม
+    if (!token || token === "null") {
+      return res
+        .status(401)
+        .json({ error: "Access denied. No token provided or invalid token." });
+    }
+
+    // ถอดรหัส token
+    let decoded;
+    try {
+      decoded = jwt.verify(
+        token.replace("Bearer ", ""),
+        process.env.JWT_SECRET
+      );
+    } catch (error) {
+      return res.status(401).json({ error: "Invalid token" });
+    }
+
+    // ตรวจสอบว่า userId และ username มีใน decoded หรือไม่
+    const userId = decoded.userId;
+    const participantName = decoded.username;
+
+    if (!userId || !participantName) {
+      return res
+        .status(400)
+        .json({ error: "Invalid token. Missing user data." });
+    }
+
+    // ตรวจสอบการประมูล
+    const auction = await Auction.findById(auctionId);
+    if (!auction) {
+      return res.status(404).json({ error: "Auction not found" });
+    }
+
+    // เช็คการเข้าร่วมประมูล
+    const existingParticipant = await AuctionParticipant.findOne({
+      auctionId,
+      userId,
+    });
+    if (existingParticipant) {
+      return res
+        .status(400)
+        .json({ error: "You have already joined this auction" });
+    }
+
+    // ตรวจสอบว่า `token` ไม่เป็น null และไม่ซ้ำกัน
+    const existingTokenParticipant = await AuctionParticipant.findOne({
+      token: token,
+    });
+
+    if (existingTokenParticipant) {
+      return res
+        .status(400)
+        .json({ error: "Token already exists in another participant record" });
+    }
+
+    // บันทึกผู้เข้าร่วม
+    const participant = new AuctionParticipant({
+      auctionId,
+      userId,
+      participantName,
+      token, // เก็บ token ลงไปด้วย
+      bids: [],
+    });
+
+    await participant.save();
+    res
+      .status(201)
+      .json({ message: "Joined auction successfully", participant });
+  } catch (error) {
+    console.error("Join Auction Error:", error);
+    res.status(400).json({ error: error.message });
+  }
+};
+
 module.exports = {
   createAuction,
   getAllAuctions,
@@ -184,4 +320,6 @@ module.exports = {
   deleteAuctionById,
   placeBid,
   getBidsByAuctionId,
+  joinAuction,
+  authenticateUser,
 };

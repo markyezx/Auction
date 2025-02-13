@@ -1,26 +1,36 @@
 const express = require("express");
 const router = express.Router();
-const auctionController = require("../controllers/auctionController");
+const {
+  createAuction,
+  getAllAuctions,
+  getAuctionById,
+  updateAuctionById,
+  deleteAuctionById,
+  placeBid,
+  getBidsByAuctionId,
+  joinAuction,
+  authenticateUser, // เพิ่มที่นี่
+} = require("../controllers/auctionController");
 
-// สร้างประมูล
-router.post("/", auctionController.createAuction);
+// สร้างการประมูลใหม่
+router.post("/", createAuction);
 
-// ดึงข้อมูลประมูลทั้งหมด
-router.get("/", auctionController.getAllAuctions);
+// ดึงข้อมูลการประมูลทั้งหมด
+router.get("/", getAllAuctions);
 
-// ดึงประมูลตาม ID
-router.get("/:id", auctionController.getAuctionById);
+// ดึงข้อมูลประมูลเฉพาะ ID
+router.get("/:id", getAuctionById);
 
-// อัปเดตประมูล
-router.put("/:id", auctionController.updateAuctionById);
+// อัปเดตข้อมูลการประมูล
+router.put("/:id", updateAuctionById);
 
-// ลบประมูล
-router.delete("/:id", auctionController.deleteAuctionById);
+// ลบการประมูล
+router.delete("/:id", deleteAuctionById);
 
-// ลงบิด
-router.post("/:id/bid", auctionController.placeBid);
+// 📌 **วางบิด** (ต้องมีการตรวจสอบตัวตน)
+router.post("/:id/bid", authenticateUser, placeBid);
 
-// ดึงประมูลที่ผ่านการประมูล
-router.get("/:id/bids", auctionController.getBidsByAuctionId);
+// 📌 **เข้าร่วมประมูล** (ต้องมีการตรวจสอบตัวตน)
+router.post("/:id/join", authenticateUser, joinAuction);
 
 module.exports = router;

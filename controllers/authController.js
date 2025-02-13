@@ -147,7 +147,12 @@ exports.login = async (req, res) => {
 
     // สร้าง JWT Token ใหม่
     const token = jwt.sign(
-      { id: user._id, email: user.email }, // Payload
+      {
+        id: user._id,
+        email: user.email,
+        userId: user._id,
+        username: user.name,
+      }, // Payload
       process.env.JWT_SECRET, // รหัสลับใน .env
       { expiresIn: "1h" } // อายุการใช้งาน Token
     );

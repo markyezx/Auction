@@ -28,6 +28,7 @@ app.use("/api/auth", authRoutes);
 app.use("/auth", authRoutes);
 app.use("/", authRoutes);
 app.use("/api/auctions", auctionRoutes); // เส้นทาง API
+app.use("/uploads", express.static("public/uploads")); // ✅ เปิดให้เข้าถึงโฟลเดอร์รูป
 
 // เริ่มต้นเซิร์ฟเวอร์
 const PORT = process.env.PORT || 3000;

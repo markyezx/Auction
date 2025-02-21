@@ -9,7 +9,8 @@ const {
   placeBid,
   getBidsByAuctionId,
   joinAuction,
-  authenticateUser, // เพิ่มที่นี่
+  authenticateUser,
+  closeAuction, // เพิ่มที่นี่
 } = require("../controllers/auctionController");
 
 // สร้างการประมูลใหม่
@@ -32,5 +33,8 @@ router.post("/:id/bid", authenticateUser, placeBid);
 
 // 📌 **เข้าร่วมประมูล** (ต้องมีการตรวจสอบตัวตน)
 router.post("/:id/join", authenticateUser, joinAuction);
+
+// 📌 **ปิดการประมูล** (ต้องมีการตรวจสอบตัวตน)
+router.post("/:id/close", authenticateUser, closeAuction);
 
 module.exports = router;

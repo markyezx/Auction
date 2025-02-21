@@ -3,6 +3,8 @@ const BidCollect = require("../schema/bidCollect.schema");
 const AuctionParticipant = require("../schema/auctionParticipant.schema");
 const jwt = require("jsonwebtoken");
 const mongoose = require("mongoose");
+const nodemailer = require("nodemailer");
+const User = require("../schema/user.schema");
 // ฟังก์ชันคำนวณเวลาสิ้นสุดใหม่
 const extendAuctionTime = (auction) => {
   const now = new Date();
@@ -16,6 +18,8 @@ const extendAuctionTime = (auction) => {
 // สร้างการประมูลใหม่
 const createAuction = async (req, res) => {
   try {
+    console.log(req.body); // ตรวจสอบว่า productImages ถูกส่งมาหรือไม่
+
     const {
       productName,
       productDescription,
@@ -28,6 +32,7 @@ const createAuction = async (req, res) => {
       productImages,
     } = req.body;
 
+    // ตรวจสอบว่า productImages ถูกส่งมาและเป็น Array ที่มีรูปภาพอย่างน้อยหนึ่งไฟล์
     if (
       !productImages ||
       !Array.isArray(productImages) ||
@@ -37,6 +42,15 @@ const createAuction = async (req, res) => {
         .status(400)
         .json({ error: "At least one product image is required." });
     }
+
+    // ตรวจสอบประเภทของแต่ละรูปภาพใน productImages
+    productImages.forEach((image, index) => {
+      if (typeof image !== "string" || !image.trim()) {
+        return res.status(400).json({
+          error: `Invalid image URL at index ${index}, should be a non-empty string`,
+        });
+      }
+    });
 
     const startTime = new Date();
     const endsIn = new Date(startTime.getTime() + durationMinutes * 60 * 1000);
@@ -50,7 +64,7 @@ const createAuction = async (req, res) => {
       currentBid: startingBid,
       highestBidder: null,
       bids: [],
-      productImages,
+      productImages, // บันทึก productImages ลง MongoDB
       startTime,
       endsIn,
       auctionType,
@@ -60,6 +74,7 @@ const createAuction = async (req, res) => {
     await auction.save();
     res.status(201).json(auction);
   } catch (error) {
+    console.error(error);
     res.status(400).json({ error: error.message });
   }
 };
@@ -122,9 +137,7 @@ const placeBid = async (req, res) => {
     const username = req.user.username;
 
     const auction = await Auction.findById(auctionId);
-    if (!auction) {
-      return res.status(404).json({ error: "Auction not found" });
-    }
+    if (!auction) return res.status(404).json({ error: "Auction not found" });
 
     let participant = await AuctionParticipant.findOne({ auctionId, userId });
     if (!participant) {
@@ -132,7 +145,6 @@ const placeBid = async (req, res) => {
         auctionId,
         userId,
         participantName: username,
-        bids: [],
       });
       await participant.save();
     }
@@ -141,6 +153,7 @@ const placeBid = async (req, res) => {
     if (now > auction.endsIn) {
       return res.status(400).json({ error: "Auction has ended" });
     }
+
     if (
       bidAmount <= auction.currentBid ||
       bidAmount < auction.currentBid + auction.minimumIncrement
@@ -167,9 +180,9 @@ const placeBid = async (req, res) => {
     });
     await bidCollect.save();
 
-    // **เช็คเงื่อนไขการต่อเวลา**
+    // ✅ ตรวจสอบและต่อเวลาถ้าจำเป็น
     if (auction.auctionType === "auto_extend") {
-      const remainingTime = (auction.endsIn - now) / 1000; // คำนวณเวลาเหลือ
+      const remainingTime = (auction.endsIn - now) / 1000;
       if (remainingTime <= auction.extendTime * 60) {
         auction.endsIn = new Date(
           now.getTime() + auction.extendTime * 60 * 1000
@@ -232,7 +245,6 @@ const getBidsByAuctionId = async (req, res) => {
 // Middleware ดึงข้อมูล user จาก token
 const authenticateUser = (req, res, next) => {
   const authHeader = req.header("Authorization");
-
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
     return res.status(401).json({ error: "Access denied. No token provided." });
   }
@@ -240,7 +252,7 @@ const authenticateUser = (req, res, next) => {
   const token = authHeader.replace("Bearer ", "");
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    req.user = decoded; // เก็บข้อมูล userId และ username ไว้ใน req
+    req.user = decoded;
     next();
   } catch (error) {
     return res.status(401).json({ error: "Invalid or expired token." });
@@ -253,14 +265,12 @@ const joinAuction = async (req, res) => {
     const auctionId = req.params.id;
     const token = req.header("Authorization");
 
-    // ตรวจสอบว่า token มีค่าไหม
     if (!token || token === "null") {
       return res
         .status(401)
-        .json({ error: "Access denied. No token provided or invalid token." });
+        .json({ error: "Access denied. No token provided." });
     }
 
-    // ถอดรหัส token
     let decoded;
     try {
       decoded = jwt.verify(
@@ -271,60 +281,142 @@ const joinAuction = async (req, res) => {
       return res.status(401).json({ error: "Invalid token" });
     }
 
-    // ตรวจสอบว่า userId และ username มีใน decoded หรือไม่
     const userId = decoded.userId;
     const participantName = decoded.username;
 
     if (!userId || !participantName) {
-      return res
-        .status(400)
-        .json({ error: "Invalid token. Missing user data." });
+      return res.status(400).json({ error: "Invalid token data" });
     }
 
-    // ตรวจสอบการประมูล
-    const auction = await Auction.findById(auctionId);
-    if (!auction) {
-      return res.status(404).json({ error: "Auction not found" });
-    }
+    // ✅ ป้องกัน Duplicate Key Error ด้วย `findOneAndUpdate`
+    const participant = await AuctionParticipant.findOneAndUpdate(
+      { auctionId, userId },
+      { auctionId, userId, participantName },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
 
-    // เช็คการเข้าร่วมประมูล
-    const existingParticipant = await AuctionParticipant.findOne({
-      auctionId,
-      userId,
-    });
-    if (existingParticipant) {
-      return res
-        .status(400)
-        .json({ error: "You have already joined this auction" });
-    }
-
-    // ตรวจสอบว่า `token` ไม่เป็น null และไม่ซ้ำกัน
-    const existingTokenParticipant = await AuctionParticipant.findOne({
-      token: token,
-    });
-
-    if (existingTokenParticipant) {
-      return res
-        .status(400)
-        .json({ error: "Token already exists in another participant record" });
-    }
-
-    // บันทึกผู้เข้าร่วม
-    const participant = new AuctionParticipant({
-      auctionId,
-      userId,
-      participantName,
-      token, // เก็บ token ลงไปด้วย
-      bids: [],
-    });
-
-    await participant.save();
     res
       .status(201)
       .json({ message: "Joined auction successfully", participant });
   } catch (error) {
     console.error("Join Auction Error:", error);
     res.status(400).json({ error: error.message });
+  }
+};
+
+// ฟังก์ชันปิดการประมูล
+const closeAuction = async (req, res) => {
+  try {
+    const auctionId = req.params.id;
+    const auction = await Auction.findById(auctionId);
+
+    if (!auction) {
+      return res.status(404).json({ error: "Auction not found" });
+    }
+
+    // ค้นหาผู้ชนะ (bidder ที่เสนอราคาสูงสุด)
+    const highestBid = await BidCollect.findOne({ auctionId })
+      .sort({ bidAmount: -1 })
+      .limit(1);
+
+    if (!highestBid) {
+      auction.status = "closed";
+      await auction.save();
+      return res.status(200).json({
+        message: "No bids were placed. Auction closed without a winner.",
+      });
+    }
+
+    // ค้นหาข้อมูลของผู้ชนะจาก AuctionParticipant
+    const winner = await AuctionParticipant.findOne({
+      auctionId: auction._id,
+      participantName: highestBid.bidderName,
+    });
+
+    if (!winner) {
+      return res
+        .status(400)
+        .json({ error: "Winner not found in participants." });
+    }
+
+    // ดึงข้อมูลอีเมลจาก User
+    const user = await User.findById(winner.userId);
+    if (!user || !user.email) {
+      return res
+        .status(400)
+        .json({ error: "Winner email not found. Cannot send notification." });
+    }
+
+    // ประกาศผู้ชนะ
+    auction.winner = highestBid.bidderName;
+    auction.status = "closed";
+    await auction.save();
+
+    // ส่งอีเมลแจ้งผู้ชนะ
+    sendWinnerEmail(
+      user.email, // ดึงอีเมลจาก User
+      highestBid.bidderName,
+      highestBid.bidAmount,
+      auction
+    );
+
+    res.json({
+      message: "Auction closed successfully",
+      winner: highestBid.bidderName,
+    });
+  } catch (error) {
+    console.error("Close Auction Error:", error);
+    res.status(400).json({ error: error.message });
+  }
+};
+
+const sendWinnerEmail = async (winnerEmail, winnerName, bidAmount, auction) => {
+  try {
+    console.log("Sending email to:", winnerEmail); // ตรวจสอบอีเมลที่ส่ง
+
+    const transporter = nodemailer.createTransport({
+      service: "gmail",
+      auth: {
+        user: process.env.EMAIL_USER, // อีเมลที่ใช้ส่ง
+        pass: process.env.EMAIL_PASS, // รหัสผ่านที่เชื่อมโยงกับอีเมล
+      },
+    });
+
+    // HTML Message ที่ปรับให้สวยงาม
+    const htmlMessage = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; border: 1px solid #ddd; border-radius: 10px; padding: 20px; background-color: #fefefe;">
+        <div style="text-align: center; background-color:rgb(241, 91, 42); padding: 15px; border-radius: 10px 10px 0 0; color: white;">
+          <h2>🎉 ยินดีด้วย! คุณชนะการประมูล ${auction.productName}</h2>
+        </div>
+        <div style="padding: 20px; color: #333;">
+          <p>เรียน <strong>${winnerName}</strong>,</p>
+          <p>ขอแสดงความยินดี! คุณได้ชนะการประมูลสำหรับผลิตภัณฑ์ "${auction.productName}" ด้วยราคาประมูลสุดท้ายที่ $${bidAmount}.</p>
+          <p>กรุณาติดต่อเราสำหรับรายละเอียดเพิ่มเติมเกี่ยวกับการชำระเงินและการจัดส่ง</p>
+          <div style="text-align: center; margin: 30px 0;">
+            <a href="mailto:support@AuctionUfa99.com" style="background-color:rgb(241, 91, 42); color: white; text-decoration: none; padding: 10px 20px; border-radius: 5px; font-size: 16px;">ติดต่อทีมสนับสนุน</a>
+          </div>
+          <p>หากคุณไม่ได้เข้าร่วมการประมูลนี้ กรุณาเพิกเฉยต่ออีเมลนี้หรือแจ้งทีมสนับสนุนของเราได้ที่ <a href="mailto:support@AuctionUfa99.com" style="color: #f15b2a;">support@AuctionUfa99.com</a></p>
+        </div>
+        <div style="text-align: center; background-color: #f9f9f9; padding: 10px; border-radius: 0 0 10px 10px; color: #999;">
+          <p>ขอบคุณที่เลือกใช้บริการของเรา</p>
+        </div>
+      </div>
+    `;
+
+    const mailOptions = {
+      from: process.env.EMAIL_USER,
+      to: winnerEmail,
+      subject: `🎉 Congratulations! You won the auction for ${auction.productName}`,
+      html: htmlMessage, // ใช้ HTML แทนการส่งข้อความแบบ text
+    };
+
+    // ส่งอีเมล
+    await transporter.sendMail(mailOptions);
+    console.log(`Winner email sent to ${winnerEmail}`);
+  } catch (error) {
+    console.error("Send Email Error:", error);
+    // ส่งข้อผิดพลาดที่เกิดขึ้นให้ผู้ดูแลระบบ
+    throw new Error("Failed to send winner email.");
   }
 };
 
@@ -338,4 +430,5 @@ module.exports = {
   getBidsByAuctionId,
   joinAuction,
   authenticateUser,
+  closeAuction,
 };

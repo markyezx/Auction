@@ -5,15 +5,14 @@ const userSchema = new mongoose.Schema({
   email: { type: String, unique: true },
   phone: String,
   password: String,
+  isVerified: { type: Boolean, default: false },
   verificationToken: String,
   resetPasswordToken: String,
   resetPasswordExpiry: Date,
-  isVerified: { type: Boolean, default: false },
-  tokens: [
-    {
-      token: String,
-    },
-  ],
+  refreshToken: String,
+  accessToken: String,
 });
 
-module.exports = mongoose.model("User", userSchema);
+const User = mongoose.model("User", userSchema);
+
+module.exports = User;

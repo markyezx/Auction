@@ -13,39 +13,30 @@ function validatePassword(password) {
 
 // Register Function
 exports.register = async (req, res) => {
-  const { name, email, password, phone } = req.body; // ใช้ name แทน username และ lastname, เพิ่ม phone
+  const { name, email, password, phone } = req.body;
 
   try {
-    // ตรวจสอบว่ามีผู้ใช้ที่ลงทะเบียนด้วยอีเมลนี้แล้วหรือไม่
     const userExists = await User.findOne({ email });
-    if (userExists) {
+    if (userExists)
       return res.status(400).json({ msg: "Email already exists" });
-    }
 
-    // เข้ารหัสรหัสผ่าน
-    const hashedPassword = await bcrypt.hash(password, 10); // ค่า 10 คือ salt rounds
-
-    // สร้าง Token สำหรับการยืนยัน
+    const hashedPassword = await bcrypt.hash(password, 10);
     const verificationToken = crypto.randomBytes(16).toString("hex");
 
-    // บันทึกข้อมูลผู้ใช้
     const newUser = new User({
-      name, // เก็บชื่อ
+      name,
       email,
-      phone, // เก็บเบอร์โทรศัพท์
+      phone,
       password: hashedPassword,
       verificationToken,
     });
     await newUser.save();
 
-    // ส่งอีเมลยืนยัน
     const emailResponse = await emailController.sendVerificationEmail(
       email,
-      name, // ส่ง name ไปในอีเมล
+      name,
       verificationToken
     );
-
-    // ตรวจสอบว่าอีเมลถูกส่งหรือไม่
     if (!emailResponse.success) {
       console.error("Email error:", emailResponse.message);
       return res
@@ -92,89 +83,70 @@ exports.sendVerificationEmail = async (req, res) => {
   }
 };
 
+// Generate Access & Refresh Tokens
+function generateTokens(user) {
+  const accessToken = jwt.sign(
+    { id: user._id, email: user.email, name: user.name },
+    process.env.JWT_SECRET,
+    { expiresIn: "15m" }
+  );
+  const refreshToken = jwt.sign(
+    { id: user._id },
+    process.env.JWT_REFRESH_SECRET,
+    { expiresIn: "7d" }
+  );
+  return { accessToken, refreshToken };
+}
+
 // Login Function
 exports.login = async (req, res) => {
   const { email, password } = req.body;
-
   try {
-    // ตรวจสอบว่ามี email และ password ใน request body หรือไม่
-    if (!email || !password) {
+    if (!email || !password)
       return res.status(400).json({ msg: "Email and password are required" });
-    }
 
-    // ค้นหาผู้ใช้จากอีเมล
     const user = await User.findOne({ email });
-    if (!user) {
+    if (!user || !(await bcrypt.compare(password, user.password))) {
       return res.status(400).json({ msg: "Invalid email or password" });
     }
 
-    // ตรวจสอบรหัสผ่าน
-    const isMatch = await bcrypt.compare(password, user.password);
-    if (!isMatch) {
-      return res.status(400).json({ msg: "Invalid email or password" });
-    }
-
-    // ตรวจสอบสถานะการยืนยันอีเมล
     if (!user.isVerified) {
-      // สร้าง Verification Token ใหม่
       const verificationToken = crypto.randomBytes(16).toString("hex");
       user.verificationToken = verificationToken;
-
-      // บันทึก Token ใหม่ในฐานข้อมูล
       await user.save();
-
-      // ส่งอีเมลยืนยัน
-      const emailResponse = await emailController.sendVerificationEmail(
+      await emailController.sendVerificationEmail(
         user.email,
-        user.name, // ชื่อผู้ใช้
+        user.name,
         verificationToken
       );
-
-      if (!emailResponse.success) {
-        console.error(
-          "Failed to resend verification email:",
-          emailResponse.message
-        );
-        return res.status(500).json({
-          msg: "Your email is not verified yet. Failed to resend verification email. Please contact support.",
-        });
-      }
-
       return res.status(400).json({
-        msg: "Your email is not verified yet. A verification email has been resent to your email address.",
+        msg: "Your email is not verified yet. Verification email resent.",
       });
     }
 
-    // สร้าง JWT Token ใหม่
-    const token = jwt.sign(
-      {
-        id: user._id,
-        email: user.email,
-        userId: user._id,
-        username: user.name,
-      }, // Payload
-      process.env.JWT_SECRET, // รหัสลับใน .env
-      { expiresIn: "1h" } // อายุการใช้งาน Token
-    );
-
-    // บันทึก Token ลงในฟิลด์ tokens ของผู้ใช้
-    user.tokens.push({ token });
-
-    // เก็บ Token ใหม่สุดในฐานข้อมูล
+    const { accessToken, refreshToken } = generateTokens(user);
+    user.refreshToken = refreshToken;
+    user.accessToken = accessToken;
     await user.save();
 
-    // ตั้งค่า Cookie สำหรับ Token
-    res.cookie("token", token, {
-      httpOnly: true, // ป้องกันการเข้าถึงผ่าน JavaScript
-      secure: process.env.NODE_ENV === "production", // ใช้ HTTPS ใน production
-      sameSite: "strict", // ป้องกัน Cross-Site Request Forgery (CSRF)
-      maxAge: 3600000, // อายุคุกกี้ 1 ชั่วโมง (หน่วยเป็นมิลลิวินาที)
+    res.cookie("accessToken", accessToken, {
+      httpOnly: true,
+      secure: true,
+      sameSite: "strict",
+      maxAge: 15 * 60 * 1000, // 15 minutes for access token
     });
 
-    // ส่ง Response พร้อมข้อความสำเร็จ
+    res.cookie("refreshToken", refreshToken, {
+      httpOnly: true,
+      secure: true,
+      sameSite: "strict",
+      maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days for refresh token
+    });
+
     res.status(200).json({
-      msg: "Login successfully",
-      token, // ส่ง Token กลับใน Response ด้วย (ถ้าต้องการใช้ใน Client)
+      msg: "Login successful",
+      accessToken,
+      refreshToken,
     });
   } catch (err) {
     console.error("Login error:", err);
@@ -184,47 +156,52 @@ exports.login = async (req, res) => {
 
 // Logout Function
 exports.logout = async (req, res) => {
-  const { email } = req.body;
-  const token = req.headers.authorization?.split(" ")[1];
+  const refreshToken = req.cookies ? req.cookies.refreshToken : null;
+
+  if (!refreshToken) {
+    return res.status(401).json({ msg: "No refresh token provided" });
+  }
 
   try {
-    if (!email || !token) {
-      return res
-        .status(400)
-        .json({ msg: "Email and authorization token are required" });
-    }
-
-    // ตรวจสอบและถอดรหัส Token
-    let decoded;
-    try {
-      decoded = jwt.verify(token, process.env.JWT_SECRET);
-    } catch (err) {
-      if (err.name === "TokenExpiredError") {
-        return res.status(401).json({ msg: "Token has expired" });
-      }
-      return res.status(401).json({ msg: "Invalid token" });
-    }
-
-    // ค้นหาผู้ใช้
-    const user = await User.findOne({ email });
-    if (!user) {
-      return res.status(400).json({ msg: "User not found" });
-    }
-
-    // ตรวจสอบว่า Token ตรงกับในฐานข้อมูลหรือไม่
-    const isTokenValid = user.tokens.some((item) => item.token === token);
-    if (!isTokenValid) {
-      return res.status(401).json({ msg: "Token is not valid for this user" });
-    }
-
-    // ลบ Token
-    user.tokens = user.tokens.filter((item) => item.token !== token);
-    await user.save();
-
-    res.json({ msg: "Logout successfully" });
+    await User.updateOne(
+      { refreshToken },
+      { $unset: { refreshToken: 1, accessToken: 1 } }
+    );
+    res.clearCookie("refreshToken");
+    res.clearCookie("accessToken");
+    res.status(200).json({ msg: "Logout successful" });
   } catch (err) {
     console.error("Logout error:", err);
     res.status(500).json({ msg: "Server error" });
+  }
+};
+
+// Refresh Token
+exports.refreshToken = async (req, res) => {
+  const { refreshToken } = req.cookies;
+  if (!refreshToken)
+    return res.status(401).json({ msg: "No refresh token provided" });
+
+  try {
+    const decoded = jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET);
+    const user = await User.findOne({ _id: decoded.id, refreshToken });
+    if (!user) return res.status(403).json({ msg: "Invalid refresh token" });
+
+    const { accessToken, refreshToken: newRefreshToken } = generateTokens(user);
+    user.refreshToken = newRefreshToken;
+    user.accessToken = accessToken;
+    await user.save();
+
+    res.cookie("refreshToken", newRefreshToken, {
+      httpOnly: true,
+      secure: true,
+      sameSite: "strict",
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+    });
+    res.status(200).json({ accessToken });
+  } catch (err) {
+    console.error("Refresh token error:", err);
+    res.status(403).json({ msg: "Invalid or expired refresh token" });
   }
 };
 

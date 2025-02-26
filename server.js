@@ -6,6 +6,7 @@ const auctionRoutes = require("./routes/auctionRoutes");
 const bodyParser = require("body-parser");
 const cors = require("cors");
 const path = require("path");
+const cookieParser = require("cookie-parser");
 
 // โหลดตัวแปรจากไฟล์ .env
 dotenv.config();
@@ -16,6 +17,7 @@ const app = express();
 app.use(bodyParser.json());
 app.use(cors());
 app.use(express.json());
+app.use(cookieParser()); // เพิ่มบรรทัดนี้เพื่อใช้ cookie-parser
 
 // เชื่อมต่อ MongoDB
 mongoose

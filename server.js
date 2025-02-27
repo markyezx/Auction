@@ -15,7 +15,7 @@ const app = express();
 
 app.use(
   cors({
-    origin: process.env.CLIENT_URL || "http://localhost:5173", // เปลี่ยนเป็น URL ของ Frontend
+    origin: process.env.CLIENT_URL || "http://localhost:3000", // อนุญาตให้เฉพาะ CLIENT_URL ที่กำหนด
     credentials: true, // อนุญาตให้ส่ง cookies และ authentication headers
     methods: ["GET", "POST", "PUT", "DELETE"], // อนุญาต HTTP methods ที่ใช้
     allowedHeaders: ["Content-Type", "Authorization"], // อนุญาตเฉพาะ Headers ที่จำเป็น
